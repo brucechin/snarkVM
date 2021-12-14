@@ -29,6 +29,7 @@ use snarkvm_gadgets::nonnative::params::OptimizationType;
 use snarkvm_polycommit::{Evaluations, LabeledCommitment, LabeledPolynomial, PCUniversalParams, PolynomialCommitment};
 use snarkvm_r1cs::{ConstraintSynthesizer, SynthesisError};
 use snarkvm_utilities::{to_bytes_le, ToBytes};
+use std::time::{Duration, Instant};
 
 #[cfg(not(feature = "std"))]
 use snarkvm_utilities::println;
@@ -269,7 +270,7 @@ impl<
         if terminator.load(Ordering::Relaxed) {
             return Err(MarlinError::Terminated);
         }
-
+        let mut start = Instant::now();
         let prover_init_state = AHPForR1CS::prover_init(&circuit_proving_key.circuit, circuit)?;
         let public_input = prover_init_state.public_input();
         let padded_public_input = prover_init_state.padded_public_input();
@@ -292,6 +293,8 @@ impl<
                 .unwrap(),
             );
         }
+        let mut duration = start.elapsed();
+        println!("Microbench time elapsed in absorb_bytes is: {:?}", duration);
 
         // --------------------------------------------------------------------
         // First round
@@ -308,11 +311,14 @@ impl<
         }
 
         let first_round_comm_time = start_timer!(|| "Committing to first round polys");
+        start = Instant::now();
         let (first_commitments, first_commitment_randomnesses) = PC::commit(
             &circuit_proving_key.committer_key,
             prover_first_oracles.iter(),
             Some(zk_rng),
         )?;
+        duration = start.elapsed();
+        println!("Microbench time elapsed in first round commitment is: {:?}", duration);
         end_timer!(first_round_comm_time);
 
         if is_recursion {
@@ -343,12 +349,15 @@ impl<
             AHPForR1CS::prover_second_round(&verifier_first_message, prover_state, zk_rng, hiding);
 
         let second_round_comm_time = start_timer!(|| "Committing to second round polys");
+        start = Instant::now();
         let (second_commitments, second_commitment_randomnesses) = PC::commit_with_terminator(
             &circuit_proving_key.committer_key,
             prover_second_oracles.iter(),
             terminator,
             Some(zk_rng),
         )?;
+        duration = start.elapsed();
+        println!("Microbench time elapsed in second round commitment is: {:?}", duration);
         end_timer!(second_round_comm_time);
 
         if is_recursion {
@@ -378,12 +387,15 @@ impl<
             AHPForR1CS::prover_third_round(&verifier_second_msg, prover_state, zk_rng)?;
 
         let third_round_comm_time = start_timer!(|| "Committing to third round polys");
+        start = Instant::now();
         let (third_commitments, third_commitment_randomnesses) = PC::commit_with_terminator(
             &circuit_proving_key.committer_key,
             prover_third_oracles.iter(),
             terminator,
             Some(zk_rng),
         )?;
+        duration = start.elapsed();
+        println!("Microbench time elapsed in third round commitment is: {:?}", duration);
         end_timer!(third_round_comm_time);
 
         if is_recursion {
@@ -493,6 +505,7 @@ impl<
         }
 
         let eval_time = start_timer!(|| "Evaluating linear combinations over query set");
+        start = Instant::now();
         let mut evaluations_unsorted = Vec::new();
         for (label, (_point_name, point)) in &query_set {
             let lc = lc_s
@@ -507,6 +520,11 @@ impl<
 
         evaluations_unsorted.sort_by(|a, b| a.0.cmp(&b.0));
         let evaluations = evaluations_unsorted.iter().map(|x| x.1).collect::<Vec<TargetField>>();
+        duration = start.elapsed();
+        println!(
+            "Microbench time elapsed in evaluating linear combinations is: {:?}",
+            duration
+        );
         end_timer!(eval_time);
 
         if terminator.load(Ordering::Relaxed) {
@@ -518,7 +536,7 @@ impl<
         } else {
             fs_rng.absorb_bytes(&to_bytes_le![&evaluations].unwrap());
         }
-
+        start = Instant::now();
         let pc_proof = if is_recursion {
             let num_open_challenges: usize = 5;
 
@@ -550,7 +568,8 @@ impl<
                 Some(zk_rng),
             )?
         };
-
+        duration = start.elapsed();
+        println!("Microbench time elapsed in computing pc proof is: {:?}", duration);
         if terminator.load(Ordering::Relaxed) {
             return Err(MarlinError::Terminated);
         }
